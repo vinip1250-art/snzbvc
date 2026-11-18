@@ -38,17 +38,20 @@ if [ "$DATABASE_DRIVER" = "postgres" ] && [ -n "$DATABASE_URL" ]; then
     fi
   fi
 
-  if ! PSQL_ERR=$(psql "$PSQL_URL" -v ON_ERROR_STOP=1 -c "
+  export PGCONNECT_TIMEOUT=3
+
+  SAVED_B64=$(psql "$PSQL_URL" -At -v ON_ERROR_STOP=1 -c "
     CREATE TABLE IF NOT EXISTS vercel_config (
       id TEXT PRIMARY KEY,
       content TEXT NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
-  " 2>&1 >/dev/null); then
-    echo "WARN: could not initialize vercel_config table: $PSQL_ERR"
-  fi
+    SELECT content FROM vercel_config WHERE id = 'default';
+  " 2>&1) || {
+    echo "WARN: could not initialize/read vercel_config table: $SAVED_B64"
+    SAVED_B64=""
+  }
 
-  SAVED_B64=$(psql "$PSQL_URL" -At -c "SELECT content FROM vercel_config WHERE id = 'default';" 2>/dev/null || true)
   if [ -n "$SAVED_B64" ]; then
     printf '%s' "$SAVED_B64" | base64 -d > "$CONFIG_FILE"
     echo "INFO: Restored config.json from Postgres to $CONFIG_FILE"
