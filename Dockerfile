@@ -1,10 +1,3 @@
 FROM ghcr.io/gaisberg/streamnzb:latest
 
-ENV PORT=80
-
-EXPOSE 80
-
-ENV INDEXER_QUERY_HEADER=Prowlarr/2.3.0.5236
-ENV INDEXER_GRAB_HEADER=SABnzbd/5.1.3
-
 EXPOSE 7000
