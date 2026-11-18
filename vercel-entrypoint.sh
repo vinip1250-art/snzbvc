@@ -24,15 +24,20 @@ if [ -z "$DATABASE_DRIVER" ] && [ -n "$DATABASE_URL" ]; then
 fi
 
 if [ "$DATABASE_DRIVER" = "postgres" ] && [ -n "$DATABASE_URL" ]; then
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+  # Sanitize query params that libpq (psql) rejects (e.g. pgbouncer=true, sslmode=no-verify)
+  PSQL_URL=$(printf '%s' "$DATABASE_URL" | sed -e 's/[?&]pgbouncer=[^&]*//g' -e 's/sslmode=no-verify/sslmode=require/g' -e 's/?&/?/' -e 's/?$//')
+
+  if ! PSQL_ERR=$(psql "$PSQL_URL" -v ON_ERROR_STOP=1 -c "
     CREATE TABLE IF NOT EXISTS vercel_config (
       id TEXT PRIMARY KEY,
       content TEXT NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
-  " >/dev/null 2>&1 || echo "WARN: could not initialize vercel_config table"
+  " 2>&1 >/dev/null); then
+    echo "WARN: could not initialize vercel_config table: $PSQL_ERR"
+  fi
 
-  SAVED_B64=$(psql "$DATABASE_URL" -At -c "SELECT content FROM vercel_config WHERE id = 'default';" 2>/dev/null || true)
+  SAVED_B64=$(psql "$PSQL_URL" -At -c "SELECT content FROM vercel_config WHERE id = 'default';" 2>/dev/null || true)
   if [ -n "$SAVED_B64" ]; then
     printf '%s' "$SAVED_B64" | base64 -d > "$CONFIG_FILE"
     echo "INFO: Restored config.json from Postgres to $CONFIG_FILE"
@@ -43,12 +48,14 @@ if [ "$DATABASE_DRIVER" = "postgres" ] && [ -n "$DATABASE_URL" ]; then
     CUR_HASH=$(md5sum "$CONFIG_FILE" | awk '{print $1}')
     if [ "$CUR_HASH" != "$LAST_HASH" ]; then
       B64=$(base64 < "$CONFIG_FILE" | tr -d '\n')
-      if psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+      if SYNC_ERR=$(psql "$PSQL_URL" -v ON_ERROR_STOP=1 -c "
         INSERT INTO vercel_config (id, content, updated_at)
         VALUES ('default', '$B64', NOW())
         ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = NOW();
-      " >/dev/null 2>&1; then
+      " 2>&1 >/dev/null); then
         LAST_HASH="$CUR_HASH"
+      else
+        echo "WARN: could not sync config.json to Postgres: $SYNC_ERR"
       fi
     fi
   }
