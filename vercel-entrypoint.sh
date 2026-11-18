@@ -40,21 +40,28 @@ if [ "$DATABASE_DRIVER" = "postgres" ] && [ -n "$DATABASE_URL" ]; then
 
   export PGCONNECT_TIMEOUT=3
 
-  SAVED_B64=$(psql "$PSQL_URL" -At -v ON_ERROR_STOP=1 -c "
+  SAVED_B64=$(psql "$PSQL_URL" -qAt -v ON_ERROR_STOP=1 -c "
+    SET client_min_messages TO WARNING;
     CREATE TABLE IF NOT EXISTS vercel_config (
       id TEXT PRIMARY KEY,
       content TEXT NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     SELECT content FROM vercel_config WHERE id = 'default';
-  " 2>&1) || {
-    echo "WARN: could not initialize/read vercel_config table: $SAVED_B64"
+  " 2>/tmp/psql_err.log) || {
+    echo "WARN: could not initialize/read vercel_config table: $(cat /tmp/psql_err.log 2>/dev/null)"
     SAVED_B64=""
   }
+  rm -f /tmp/psql_err.log
 
   if [ -n "$SAVED_B64" ]; then
-    printf '%s' "$SAVED_B64" | base64 -d > "$CONFIG_FILE"
-    echo "INFO: Restored config.json from Postgres to $CONFIG_FILE"
+    if printf '%s' "$SAVED_B64" | base64 -d > "${CONFIG_FILE}.tmp" 2>/dev/null && [ -s "${CONFIG_FILE}.tmp" ]; then
+      mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+      echo "INFO: Restored config.json from Postgres to $CONFIG_FILE"
+    else
+      rm -f "${CONFIG_FILE}.tmp"
+      echo "WARN: Invalid base64 config in Postgres, ignoring"
+    fi
   fi
 
   sync_config() {
