@@ -24,8 +24,19 @@ if [ -z "$DATABASE_DRIVER" ] && [ -n "$DATABASE_URL" ]; then
 fi
 
 if [ "$DATABASE_DRIVER" = "postgres" ] && [ -n "$DATABASE_URL" ]; then
-  # Sanitize query params that libpq (psql) rejects (e.g. pgbouncer=true, sslmode=no-verify)
-  PSQL_URL=$(printf '%s' "$DATABASE_URL" | sed -e 's/[?&]pgbouncer=[^&]*//g' -e 's/sslmode=no-verify/sslmode=require/g' -e 's/?&/?/' -e 's/?$//')
+  # Strip query params that libpq (psql) rejects (e.g. supa=..., pgbouncer=...), keeping only sslmode
+  PSQL_BASE="${DATABASE_URL%%\?*}"
+  PSQL_QUERY="${DATABASE_URL#*\?}"
+  PSQL_URL="$PSQL_BASE"
+  if [ "$PSQL_QUERY" != "$DATABASE_URL" ]; then
+    SSL_MODE=$(printf '%s' "$PSQL_QUERY" | sed -n 's/.*sslmode=\([^&]*\).*/\1/p')
+    if [ "$SSL_MODE" = "no-verify" ]; then
+      SSL_MODE="require"
+    fi
+    if [ -n "$SSL_MODE" ]; then
+      PSQL_URL="${PSQL_BASE}?sslmode=${SSL_MODE}"
+    fi
+  fi
 
   if ! PSQL_ERR=$(psql "$PSQL_URL" -v ON_ERROR_STOP=1 -c "
     CREATE TABLE IF NOT EXISTS vercel_config (
